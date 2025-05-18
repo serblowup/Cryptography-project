@@ -1,54 +1,186 @@
-/*
- * main.c
- *
- *  Created on: 15 апр. 2025 г.
- *      Author: СЕРГЕЙ
- */
-
 #include "main.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <io.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 
-#define BLOCK_SIZE 16
-#define MAX_KEY_LEN 32
+// =============================================
+// Полные таблицы подстановки (S-boxes)
+// =============================================
 
-void add_padding(BYTE *block, size_t data_len, size_t block_size) {
-    BYTE pad_value = block_size - data_len;
-    for (size_t i = data_len; i < block_size; i++) {
-        block[i] = pad_value;
+static const BYTE substitution_table[256] = {
+    0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
+    0xCA, 0x82, 0xC9, 0x7D, 0xFA, 0x59, 0x47, 0xF0, 0xAD, 0xD4, 0xA2, 0xAF, 0x9C, 0xA4, 0x72, 0xC0,
+    0xB7, 0xFD, 0x93, 0x26, 0x36, 0x3F, 0xF7, 0xCC, 0x34, 0xA5, 0xE5, 0xF1, 0x71, 0xD8, 0x31, 0x15,
+    0x04, 0xC7, 0x23, 0xC3, 0x18, 0x96, 0x05, 0x9A, 0x07, 0x12, 0x80, 0xE2, 0xEB, 0x27, 0xB2, 0x75,
+    0x09, 0x83, 0x2C, 0x1A, 0x1B, 0x6E, 0x5A, 0xA0, 0x52, 0x3B, 0xD6, 0xB3, 0x29, 0xE3, 0x2F, 0x84,
+    0x53, 0xD1, 0x00, 0xED, 0x20, 0xFC, 0xB1, 0x5B, 0x6A, 0xCB, 0xBE, 0x39, 0x4A, 0x4C, 0x58, 0xCF,
+    0xD0, 0xEF, 0xAA, 0xFB, 0x43, 0x4D, 0x33, 0x85, 0x45, 0xF9, 0x02, 0x7F, 0x50, 0x3C, 0x9F, 0xA8,
+    0x51, 0xA3, 0x40, 0x8F, 0x92, 0x9D, 0x38, 0xF5, 0xBC, 0xB6, 0xDA, 0x21, 0x10, 0xFF, 0xF3, 0xD2,
+    0xCD, 0x0C, 0x13, 0xEC, 0x5F, 0x97, 0x44, 0x17, 0xC4, 0xA7, 0x7E, 0x3D, 0x64, 0x5D, 0x19, 0x73,
+    0x60, 0x81, 0x4F, 0xDC, 0x22, 0x2A, 0x90, 0x88, 0x46, 0xEE, 0xB8, 0x14, 0xDE, 0x5E, 0x0B, 0xDB,
+    0xE0, 0x32, 0x3A, 0x0A, 0x49, 0x06, 0x24, 0x5C, 0xC2, 0xD3, 0xAC, 0x62, 0x91, 0x95, 0xE4, 0x79,
+    0xE7, 0xC8, 0x37, 0x6D, 0x8D, 0xD5, 0x4E, 0xA9, 0x6C, 0x56, 0xF4, 0xEA, 0x65, 0x7A, 0xAE, 0x08,
+    0xBA, 0x78, 0x25, 0x2E, 0x1C, 0xA6, 0xB4, 0xC6, 0xE8, 0xDD, 0x74, 0x1F, 0x4B, 0xBD, 0x8B, 0x8A,
+    0x70, 0x3E, 0xB5, 0x66, 0x48, 0x03, 0xF6, 0x0E, 0x61, 0x35, 0x57, 0xB9, 0x86, 0xC1, 0x1D, 0x9E,
+    0xE1, 0xF8, 0x98, 0x11, 0x69, 0xD9, 0x8E, 0x94, 0x9B, 0x1E, 0x87, 0xE9, 0xCE, 0x55, 0x28, 0xDF,
+    0x8C, 0xA1, 0x89, 0x0D, 0xBF, 0xE6, 0x42, 0x68, 0x41, 0x99, 0x2D, 0x0F, 0xB0, 0x54, 0xBB, 0x16
+};
+
+// =============================================
+// Вспомогательные функции
+// =============================================
+
+void create_necessary_dirs() {
+    _mkdir("C:\\Eclipse_dev\\Project_cryptography\\users");
+    _mkdir("C:\\Eclipse_dev\\Project_cryptography\\logs");
+}
+
+void secure_zero_memory(void* ptr, size_t len) {
+    volatile char* vptr = (volatile char*)ptr;
+    while (len--) *vptr++ = 0;
+}
+
+void log_operation(const char* operation, const char* filename, int success) {
+    FILE* log_file = fopen(LOG_FILE, "a");
+    if (!log_file) return;
+
+    time_t now = time(NULL);
+    char time_str[20];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
+
+    fprintf(log_file, "[%s] %s: %s - %s\n",
+            time_str,
+            operation,
+            filename,
+            success ? "SUCCESS" : "FAILED");
+    fclose(log_file);
+}
+
+// =============================================
+// Функции аутентификации
+// =============================================
+
+void generate_key_from_password(const char* password, BYTE* key, size_t key_len) {
+    size_t pass_len = strlen(password);
+    for (size_t i = 0; i < key_len; i++) {
+        key[i] = 0;
+        for (size_t j = 0; j < pass_len; j++) {
+            key[i] ^= password[j] + (i * 31) + (j * 17);
+            key[i] = (key[i] << 3) | (key[i] >> 5);
+        }
+        key[i] = substitution_table[key[i]];
+        if (i > 0) key[i] ^= key[i-1];
     }
 }
 
-int is_valid_padding(BYTE *block, size_t block_size) {
-    BYTE pad_value = block[block_size - 1];
-    if (pad_value > block_size || pad_value == 0) {
+int authenticate(BYTE* key) {
+    char username[MAX_USERNAME_LEN + 2]; // +2 для символа \n и \0
+    char password[MAX_PASSWORD_LEN + 2];
+    User user;
+    FILE* users_file;
+
+    printf(" Authentication \n");
+    printf("1. Registration\n2. Entrance\n> ");
+    int choice;
+    if (scanf("%d", &choice) != 1 || (choice != 1 && choice != 2)) {
+        printf("Error: invalid choice!\n");
+        while (getchar() != '\n');
         return 0;
     }
-    for (size_t i = block_size - pad_value; i < block_size; i++) {
-        if (block[i] != pad_value) return 0;
+    while (getchar() != '\n');
+
+    printf("Login (max %d chars): ", MAX_USERNAME_LEN);
+    if (!fgets(username, sizeof(username), stdin)) return 0;
+    username[strcspn(username, "\n")] = '\0';
+
+    if (strlen(username) > MAX_USERNAME_LEN) {
+        printf("Error: login too long (max %d characters)!\n", MAX_USERNAME_LEN);
+        return 0;
     }
+    if (strlen(username) == 0) {
+        printf("Error: login cannot be empty!\n");
+        return 0;
+    }
+
+    printf("Password (max %d chars): ", MAX_PASSWORD_LEN);
+    if (!fgets(password, sizeof(password), stdin)) return 0;
+    password[strcspn(password, "\n")] = '\0';
+
+    if (strlen(password) > MAX_PASSWORD_LEN) {
+        printf("Error: password too long (max %d characters)!\n", MAX_PASSWORD_LEN);
+        secure_zero_memory(password, MAX_PASSWORD_LEN);
+        return 0;
+    }
+    if (strlen(password) == 0) {
+        printf("Error: password cannot be empty!\n");
+        return 0;
+    }
+
+    generate_key_from_password(password, key, MAX_KEY_LEN);
+    secure_zero_memory(password, MAX_PASSWORD_LEN);
+
+    users_file = fopen(USERS_FILE, choice == 1 ? "ab+" : "rb");
+    if (!users_file) {
+        log_operation("Auth", "Failed to open users file", 0);
+        return 0;
+    }
+
+    if (choice == 1) {
+        while (fread(&user, sizeof(User), 1, users_file)) {
+            if (strcmp(user.username, username) == 0) {
+                fclose(users_file);
+                printf("Error: user '%s' already exists!\n", username);
+                log_operation("Register Failed", username, 0);
+                return 0;
+            }
+        }
+        strncpy(user.username, username, MAX_USERNAME_LEN);
+        memcpy(user.password_hash, key, MAX_KEY_LEN);
+        fwrite(&user, sizeof(User), 1, users_file);
+        printf("Registration successful!\n");
+        log_operation("Register", username, 1);
+    } else {
+        int found = 0;
+        int user_exists = 0;
+        while (fread(&user, sizeof(User), 1, users_file)) {
+            if (strcmp(user.username, username) == 0) {
+                user_exists = 1;
+                if (memcmp(user.password_hash, key, MAX_KEY_LEN) == 0) {
+                    found = 1;
+                    break;
+                }
+            }
+        }
+
+        if (!user_exists) {
+            printf("Error: user '%s' does not exist!\n", username);
+            log_operation("Login Failed - User not found", username, 0);
+            fclose(users_file);
+            return 0;
+        }
+
+        if (!found) {
+            printf("Error: incorrect password for user '%s'!\n", username);
+            log_operation("Login Failed - Wrong password", username, 0);
+            fclose(users_file);
+            return 0;
+        }
+
+        printf("Login successful!\n");
+        log_operation("Login", username, 1);
+    }
+
+    fclose(users_file);
     return 1;
 }
 
-void parse_key(const char *key_str, BYTE *key, size_t key_len) {
-    for (size_t i = 0; i < key_len; i++) {
-        sscanf(key_str + 2 * i, "%2hhx", &key[i]);
-    }
-}
-
-size_t remove_padding(BYTE *block, size_t block_size) {
-    BYTE pad_value = block[block_size - 1];
-    return block_size - pad_value;
-}
+// =============================================
+// Функции шифрования TwoFish
+// =============================================
 
 #define ROL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 #define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 
-unsigned long long h(UINT x, UINT *keys, int k) {
+unsigned long long h(UINT x, UINT* keys, int k) {
     unsigned long long result = x;
     for (int i = 0; i < k; i++) {
         result ^= (keys[i] + result);
@@ -56,25 +188,24 @@ unsigned long long h(UINT x, UINT *keys, int k) {
     return result;
 }
 
-void TwoFish_init(TwoFish *tf, BYTE *key, size_t length) {
-    short N;
-    if (length <= 16) {
-        N = 128;
-    } else if (length <= 24) {
-        N = 192;
-    } else {
-        N = 256;
-    }
+void TwoFish_init(TwoFish* tf, BYTE* key, size_t length) {
+    short N = length <= 16 ? 128 : (length <= 24 ? 192 : 256);
+    BYTE* temp_key = (BYTE*)malloc(N / 8);
+    if (!temp_key) return;
 
-    BYTE *temp_key = (BYTE *)malloc(N / 8);
     for (int i = 0; i < N / 8; i++) {
         temp_key[i] = (i < length) ? key[i] : 0;
     }
 
     tf->k = N / 64;
-
-    UINT *Me = (UINT *)malloc(tf->k * sizeof(UINT));
-    UINT *Mo = (UINT *)malloc(tf->k * sizeof(UINT));
+    UINT* Me = (UINT*)malloc(tf->k * sizeof(UINT));
+    UINT* Mo = (UINT*)malloc(tf->k * sizeof(UINT));
+    if (!Me || !Mo) {
+        free(temp_key);
+        if (Me) free(Me);
+        if (Mo) free(Mo);
+        return;
+    }
 
     BYTE RS[4][8] = {
         {0x01, 0xA4, 0x55, 0x87, 0x5A, 0x58, 0xDB, 0x9E},
@@ -88,15 +219,15 @@ void TwoFish_init(TwoFish *tf, BYTE *key, size_t length) {
         for (int j = 0; j < 4; j++) {
             val |= (temp_key[4 * i + j] << (24 - 8 * j));
         }
-
-        if (i % 2 == 0) {
-            Me[c1++] = val;
-        } else {
-            Mo[c2++] = val;
-        }
+        (i % 2 == 0) ? (Me[c1++] = val) : (Mo[c2++] = val);
     }
 
-    tf->SBox = (UINT *)malloc(tf->k * sizeof(UINT));
+    tf->SBox = (UINT*)malloc(tf->k * sizeof(UINT));
+    if (!tf->SBox) {
+        free(Me); free(Mo); free(temp_key);
+        return;
+    }
+
     for (int i = 0; i < tf->k; i++) {
         tf->SBox[tf->k - 1 - i] = 0;
         for (int j = 0; j < 4; j++) {
@@ -117,25 +248,20 @@ void TwoFish_init(TwoFish *tf, BYTE *key, size_t length) {
         tf->keys[2 * i + 1] = ROL(((A + 2 * B) & 0xFFFFFFFF), 9);
     }
 
-    free(Me);
-    free(Mo);
-    free(temp_key);
+    free(Me); free(Mo); free(temp_key);
 }
 
-void TwoFish_cleanup(TwoFish *tf) {
-    free(tf->SBox);
+void TwoFish_cleanup(TwoFish* tf) {
+    if (tf->SBox) free(tf->SBox);
 }
 
-BYTE* TwoFish_encrypt(TwoFish *tf, BYTE *plain) {
+BYTE* TwoFish_encrypt(TwoFish* tf, BYTE* plain) {
     UINT A = (plain[0] << 24) | (plain[1] << 16) | (plain[2] << 8) | plain[3];
     UINT B = (plain[4] << 24) | (plain[5] << 16) | (plain[6] << 8) | plain[7];
     UINT C = (plain[8] << 24) | (plain[9] << 16) | (plain[10] << 8) | plain[11];
     UINT D = (plain[12] << 24) | (plain[13] << 16) | (plain[14] << 8) | plain[15];
 
-    A ^= tf->keys[0];
-    B ^= tf->keys[1];
-    C ^= tf->keys[2];
-    D ^= tf->keys[3];
+    A ^= tf->keys[0]; B ^= tf->keys[1]; C ^= tf->keys[2]; D ^= tf->keys[3];
 
     for (int i = 0; i < 16; i++) {
         unsigned long long tA = h(A, tf->SBox, tf->k);
@@ -147,49 +273,29 @@ BYTE* TwoFish_encrypt(TwoFish *tf, BYTE *plain) {
         C = ROR(C, 1);
 
         if (i != 15) {
-            UINT tmp = C;
-            C = A;
-            A = tmp;
-            tmp = D;
-            D = B;
-            B = tmp;
+            UINT tmp = C; C = A; A = tmp;
+            tmp = D; D = B; B = tmp;
         }
     }
 
-    A ^= tf->keys[4];
-    B ^= tf->keys[5];
-    C ^= tf->keys[6];
-    D ^= tf->keys[7];
+    A ^= tf->keys[4]; B ^= tf->keys[5]; C ^= tf->keys[6]; D ^= tf->keys[7];
 
-    plain[0] = (A >> 24) & 0xFF;
-    plain[1] = (A >> 16) & 0xFF;
-    plain[2] = (A >> 8) & 0xFF;
-    plain[3] = A & 0xFF;
-    plain[4] = (B >> 24) & 0xFF;
-    plain[5] = (B >> 16) & 0xFF;
-    plain[6] = (B >> 8) & 0xFF;
-    plain[7] = B & 0xFF;
-    plain[8] = (C >> 24) & 0xFF;
-    plain[9] = (C >> 16) & 0xFF;
-    plain[10] = (C >> 8) & 0xFF;
-    plain[11] = C & 0xFF;
-    plain[12] = (D >> 24) & 0xFF;
-    plain[13] = (D >> 16) & 0xFF;
-    plain[14] = (D >> 8) & 0xFF;
-    plain[15] = D & 0xFF;
+    for (int i = 0; i < 4; i++) {
+        plain[i] = (A >> (24 - 8 * i)) & 0xFF;
+        plain[i + 4] = (B >> (24 - 8 * i)) & 0xFF;
+        plain[i + 8] = (C >> (24 - 8 * i)) & 0xFF;
+        plain[i + 12] = (D >> (24 - 8 * i)) & 0xFF;
+    }
     return plain;
 }
 
-BYTE* TwoFish_decrypt(TwoFish *tf, BYTE *cipher) {
+BYTE* TwoFish_decrypt(TwoFish* tf, BYTE* cipher) {
     UINT A = (cipher[0] << 24) | (cipher[1] << 16) | (cipher[2] << 8) | cipher[3];
     UINT B = (cipher[4] << 24) | (cipher[5] << 16) | (cipher[6] << 8) | cipher[7];
     UINT C = (cipher[8] << 24) | (cipher[9] << 16) | (cipher[10] << 8) | cipher[11];
     UINT D = (cipher[12] << 24) | (cipher[13] << 16) | (cipher[14] << 8) | cipher[15];
 
-    A ^= tf->keys[4];
-    B ^= tf->keys[5];
-    C ^= tf->keys[6];
-    D ^= tf->keys[7];
+    A ^= tf->keys[4]; B ^= tf->keys[5]; C ^= tf->keys[6]; D ^= tf->keys[7];
 
     for (int i = 15; i >= 0; i--) {
         unsigned long long tA = h(A, tf->SBox, tf->k);
@@ -201,110 +307,84 @@ BYTE* TwoFish_decrypt(TwoFish *tf, BYTE *cipher) {
         D = ROR(D, 1);
 
         if (i > 0) {
-            UINT tmp = C;
-            C = A;
-            A = tmp;
-            tmp = D;
-            D = B;
-            B = tmp;
+            UINT tmp = C; C = A; A = tmp;
+            tmp = D; D = B; B = tmp;
         }
     }
 
-    A ^= tf->keys[0];
-    B ^= tf->keys[1];
-    C ^= tf->keys[2];
-    D ^= tf->keys[3];
+    A ^= tf->keys[0]; B ^= tf->keys[1]; C ^= tf->keys[2]; D ^= tf->keys[3];
 
-    cipher[0] = (A >> 24) & 0xFF;
-    cipher[1] = (A >> 16) & 0xFF;
-    cipher[2] = (A >> 8) & 0xFF;
-    cipher[3] = A & 0xFF;
-    cipher[4] = (B >> 24) & 0xFF;
-    cipher[5] = (B >> 16) & 0xFF;
-    cipher[6] = (B >> 8) & 0xFF;
-    cipher[7] = B & 0xFF;
-    cipher[8] = (C >> 24) & 0xFF;
-    cipher[9] = (C >> 16) & 0xFF;
-    cipher[10] = (C >> 8) & 0xFF;
-    cipher[11] = C & 0xFF;
-    cipher[12] = (D >> 24) & 0xFF;
-    cipher[13] = (D >> 16) & 0xFF;
-    cipher[14] = (D >> 8) & 0xFF;
-    cipher[15] = D & 0xFF;
+    for (int i = 0; i < 4; i++) {
+        cipher[i] = (A >> (24 - 8 * i)) & 0xFF;
+        cipher[i + 4] = (B >> (24 - 8 * i)) & 0xFF;
+        cipher[i + 8] = (C >> (24 - 8 * i)) & 0xFF;
+        cipher[i + 12] = (D >> (24 - 8 * i)) & 0xFF;
+    }
     return cipher;
 }
 
-void process_directory(const char *dirpath, BYTE *key, size_t key_len, int encrypt) {
-    WIN32_FIND_DATA findFileData;
-    HANDLE hFind = INVALID_HANDLE_VALUE;
-    char path[MAX_PATH];
+// =============================================
+// Функции работы с файлами
+// =============================================
 
-    snprintf(path, MAX_PATH, "%s\\*", dirpath);
+void add_padding(BYTE* block, size_t data_len, size_t block_size) {
+    BYTE pad_value = block_size - data_len;
+    for (size_t i = data_len; i < block_size; i++) {
+        block[i] = pad_value;
+    }
+}
 
-    hFind = FindFirstFile(path, &findFileData);
+int is_valid_padding(BYTE* block, size_t block_size) {
+    BYTE pad_value = block[block_size - 1];
+    if (pad_value > block_size || pad_value == 0) return 0;
+    for (size_t i = block_size - pad_value; i < block_size; i++) {
+        if (block[i] != pad_value) return 0;
+    }
+    return 1;
+}
 
-    if (hFind == INVALID_HANDLE_VALUE) {
-        printf("Error opening the directory: %s\n", dirpath);
+size_t remove_padding(BYTE* block, size_t block_size) {
+    BYTE pad_value = block[block_size - 1];
+    return block_size - pad_value;
+}
+
+void process_file(const char* input_path, BYTE* key, int encrypt) {
+    char temp_path[MAX_PATH_LEN];
+    snprintf(temp_path, MAX_PATH_LEN, "%s.temp", input_path);
+
+    FILE* input_file = fopen(input_path, "rb");
+    if (!input_file) {
+        printf("Error opening input file: %s\n", input_path);
+        log_operation("File Open", input_path, 0);
         return;
     }
 
-    do {
-        if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0) {
-            continue;
-        }
-
-        char input_path[MAX_PATH];
-        snprintf(input_path, MAX_PATH, "%s\\%s", dirpath, findFileData.cFileName);
-
-        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            printf("Processing the directory: %s\n", input_path);
-            process_directory(input_path, key, key_len, encrypt);
-        } else {
-            printf("Processing the file: %s\n", input_path);
-            process_file(input_path, key, key_len, encrypt);
-        }
-    } while (FindNextFile(hFind, &findFileData) != 0);
-
-    FindClose(hFind);
-}
-
-void process_file(const char *input_path, BYTE *key, size_t key_len, int encrypt) {
-    char temp_path[MAX_PATH];
-    snprintf(temp_path, MAX_PATH, "%s.temp", input_path);
-
-    FILE *input_file = fopen(input_path, "rb");
-    FILE *temp_file = fopen(temp_path, "wb");
-    if (!input_file || !temp_file) {
-        perror("File opening error");
-        if (input_file) fclose(input_file);
-        if (temp_file) fclose(temp_file);
-        _unlink(temp_path);
+    FILE* temp_file = fopen(temp_path, "wb");
+    if (!temp_file) {
+        fclose(input_file);
+        printf("Error creating temp file: %s\n", temp_path);
+        log_operation("Temp File Create", temp_path, 0);
         return;
     }
 
     TwoFish tf;
-    TwoFish_init(&tf, key, key_len);
-
+    TwoFish_init(&tf, key, MAX_KEY_LEN);
     BYTE buffer[BLOCK_SIZE];
     size_t bytes_read;
+    int success = 1;
 
     while ((bytes_read = fread(buffer, 1, BLOCK_SIZE, input_file)) > 0) {
         if (encrypt) {
-            if (bytes_read < BLOCK_SIZE) {
-                add_padding(buffer, bytes_read, BLOCK_SIZE);
-            }
+            if (bytes_read < BLOCK_SIZE) add_padding(buffer, bytes_read, BLOCK_SIZE);
             TwoFish_encrypt(&tf, buffer);
             fwrite(buffer, 1, BLOCK_SIZE, temp_file);
         } else {
             TwoFish_decrypt(&tf, buffer);
             if (feof(input_file)) {
                 if (!is_valid_padding(buffer, BLOCK_SIZE)) {
-                    printf("Error: Incorrect padding.\n");
-                    fclose(input_file);
-                    fclose(temp_file);
-                    _unlink(temp_path);
-                    TwoFish_cleanup(&tf);
-                    return;
+                    printf("Error: incorrect padding in file %s!\n", input_path);
+                    success = 0;
+                    break;
                 }
                 bytes_read = remove_padding(buffer, BLOCK_SIZE);
             }
@@ -316,52 +396,103 @@ void process_file(const char *input_path, BYTE *key, size_t key_len, int encrypt
     fclose(temp_file);
     TwoFish_cleanup(&tf);
 
-    if (access(input_path, F_OK) == 0 && _unlink(input_path) != 0) {
-        perror("Error deleting the source file");
-        _unlink(temp_path);
+    if (!success) {
+        remove(temp_path);
+        log_operation("File Processing", input_path, 0);
         return;
     }
 
-    if (rename(temp_path, input_path) != 0) {
-        perror("File replacement error");
-        _unlink(temp_path);
+    if (remove(input_path) != 0 || rename(temp_path, input_path) != 0) {
+        remove(temp_path);
+        printf("Error replacing file: %s\n", input_path);
+        log_operation("File Replace", input_path, 0);
     } else {
-        printf("File '%s' successfully processed.\n", input_path);
+        log_operation(encrypt ? "Encrypt" : "Decrypt", input_path, 1);
+        printf("File %s successfully %s!\n", input_path, encrypt ? "encrypted" : "decrypted");
     }
 }
 
-int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        printf("Использование: %s <input_path> <key> <mode>\n", argv[0]);
-        printf("<key>: 32-байтный ключ в hex-формате (64 символа, например: 000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F)\n");
-        printf("<mode>: 1 - шифрование, 0 - расшифровка\n");
-        return 1;
+void process_directory(const char* dirpath, BYTE* key, int encrypt) {
+    WIN32_FIND_DATAA findFileData;
+    HANDLE hFind = INVALID_HANDLE_VALUE;
+    char path[MAX_PATH_LEN];
+
+    snprintf(path, MAX_PATH_LEN, "%s\\*", dirpath);
+
+    hFind = FindFirstFileA(path, &findFileData);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        printf("Error opening directory: %s\n", dirpath);
+        log_operation("Directory Open", dirpath, 0);
+        return;
     }
 
-    const char *input_path = argv[1];
-    const char *key_str = argv[2];
-    int mode = atoi(argv[3]);
+    do {
+        if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0) {
+            continue;
+        }
 
-    if (strlen(key_str) != 64) {
-        printf("Error: The key must contain 64 characters (32 bytes in hex format).\n");
-        return 1;
-    }
+        char full_path[MAX_PATH_LEN];
+        snprintf(full_path, MAX_PATH_LEN, "%s\\%s", dirpath, findFileData.cFileName);
 
+        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            process_directory(full_path, key, encrypt);
+        } else {
+            process_file(full_path, key, encrypt);
+        }
+    } while (FindNextFileA(hFind, &findFileData) != 0);
+
+    FindClose(hFind);
+    log_operation("Directory Process", dirpath, 1);
+    printf("Directory %s successfully processed!\n", dirpath);
+}
+
+// =============================================
+// Главная функция
+// =============================================
+
+int main() {
+    setlocale(LC_ALL, "Russian");
+    create_necessary_dirs();
     BYTE key[MAX_KEY_LEN];
-    parse_key(key_str, key, MAX_KEY_LEN);
+    char path[MAX_PATH_LEN];
+    int mode;
 
-    DWORD attr = GetFileAttributes(input_path);
+    if (!authenticate(key)) {
+        printf("Access denied.\n");
+        return 1;
+    }
+
+    printf("Enter the path to the file/folder: ");
+    if (!fgets(path, MAX_PATH_LEN, stdin)) return 1;
+    path[strcspn(path, "\n")] = '\0';
+
+    // Удаление кавычек, если они есть
+    if (path[0] == '"' && path[strlen(path)-1] == '"') {
+        path[strlen(path)-1] = '\0';
+        memmove(path, path+1, strlen(path));
+    }
+
+    printf("Mode (1-encryption, 0-decryption): ");
+    if (scanf("%d", &mode) != 1 || (mode != 0 && mode != 1)) {
+        printf("Error: invalid mode! Must be 0 (decryption) or 1 (encryption).\n");
+        secure_zero_memory(key, MAX_KEY_LEN);
+        return 1;
+    }
+
+    DWORD attr = GetFileAttributesA(path);
     if (attr == INVALID_FILE_ATTRIBUTES) {
-        printf("Path access error: %s\n", input_path);
+        printf("Error: path not found or access denied: %s\n", path);
+        log_operation("Path Access", path, 0);
+        secure_zero_memory(key, MAX_KEY_LEN);
         return 1;
     }
 
     if (attr & FILE_ATTRIBUTE_DIRECTORY) {
-        process_directory(input_path, key, MAX_KEY_LEN, mode);
+        process_directory(path, key, mode);
     } else {
-        process_file(input_path, key, MAX_KEY_LEN, mode);
+        process_file(path, key, mode);
     }
 
+    secure_zero_memory(key, MAX_KEY_LEN);
     return 0;
 }
-
