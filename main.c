@@ -1,6 +1,7 @@
 #include "main.h"
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <stdint.h>
 
 // =============================================
 // Полные таблицы подстановки (S-boxes)
@@ -55,6 +56,45 @@ void log_operation(const char* operation, const char* filename, int success) {
     fclose(log_file);
 }
 
+void show_progress_bar(uint64_t processed, uint64_t total) {
+    static int initialized = 0;
+    static clock_t last_update = 0;
+    static int last_percent = -1;
+
+    if (!initialized) {
+        printf("\nProcessing progress:\n");
+        printf("[");
+        for (int i = 0; i < 50; i++) printf(" ");
+        printf("] 0%%");
+        initialized = 1;
+    }
+
+    clock_t now = clock();
+    if (now - last_update < CLOCKS_PER_SEC / 10 && processed != total) {
+        return; // Обновляем не чаще 10 раз в секунду
+    }
+    last_update = now;
+
+    int percent = (int)((double)processed / total * 100);
+    if (percent == last_percent) return;
+    last_percent = percent;
+
+    printf("\r[");
+    int pos = percent / 2;
+    for (int i = 0; i < 50; i++) {
+        if (i < pos) printf("=");
+        else if (i == pos) printf(">");
+        else printf(" ");
+    }
+    printf("] %d%%", percent);
+    fflush(stdout);
+
+    if (processed == total) {
+        printf("\n");
+        initialized = 0;
+    }
+}
+
 // =============================================
 // Функции аутентификации
 // =============================================
@@ -73,7 +113,7 @@ void generate_key_from_password(const char* password, BYTE* key, size_t key_len)
 }
 
 int authenticate(BYTE* key) {
-    char username[MAX_USERNAME_LEN + 2]; // +2 для символа \n и \0
+    char username[MAX_USERNAME_LEN + 2];
     char password[MAX_PASSWORD_LEN + 2];
     User user;
     FILE* users_file;
@@ -173,6 +213,7 @@ int authenticate(BYTE* key) {
     return 1;
 }
 
+// ... [остальной код остается без изменений, как в вашем исходном файле]
 // =============================================
 // Функции шифрования TwoFish
 // =============================================
@@ -359,6 +400,11 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
         return;
     }
 
+    // Получаем размер файла (64-битный)
+    _fseeki64(input_file, 0, SEEK_END);
+    uint64_t file_size = _ftelli64(input_file);
+    _fseeki64(input_file, 0, SEEK_SET);
+
     FILE* temp_file = fopen(temp_path, "wb");
     if (!temp_file) {
         fclose(input_file);
@@ -372,6 +418,13 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
     BYTE buffer[BLOCK_SIZE];
     size_t bytes_read;
     int success = 1;
+    uint64_t total_bytes_processed = 0;
+    clock_t start_time = clock();
+    int show_progress = file_size >= PROGRESS_BAR_THRESHOLD;
+
+    if (show_progress) {
+        printf("Processing large file (%lld bytes)...\n", file_size);
+    }
 
     while ((bytes_read = fread(buffer, 1, BLOCK_SIZE, input_file)) > 0) {
         if (encrypt) {
@@ -390,7 +443,15 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
             }
             fwrite(buffer, 1, bytes_read, temp_file);
         }
+        total_bytes_processed += bytes_read;
+
+        if (show_progress) {
+            show_progress_bar(total_bytes_processed, file_size);
+        }
     }
+
+    clock_t end_time = clock();
+    double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
 
     fclose(input_file);
     fclose(temp_file);
@@ -402,13 +463,33 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
         return;
     }
 
-    if (remove(input_path) != 0 || rename(temp_path, input_path) != 0) {
+    if (remove(input_path)) {
+        printf("Error deleting original file: %s\n", input_path);
         remove(temp_path);
-        printf("Error replacing file: %s\n", input_path);
-        log_operation("File Replace", input_path, 0);
+        return;
+    }
+
+    if (rename(temp_path, input_path)) {
+        printf("Error renaming temp file: %s\n", temp_path);
+        remove(temp_path);
+        return;
+    }
+
+    log_operation(encrypt ? "Encrypt" : "Decrypt", input_path, 1);
+
+    // Вывод размера файла в МБ
+    double file_size_mb = (double)file_size / (1024.0 * 1024.0);
+    printf("\nFile %s successfully %s!\n", input_path, encrypt ? "encrypted" : "decrypted");
+    printf("File size: %.2f MB\n", file_size_mb);
+
+    // Расчет скорости
+    if (elapsed_time > 0) {
+        double speed_mb_per_sec = (double)total_bytes_processed / (1024.0 * 1024.0) / elapsed_time;
+        double speed_mbps = speed_mb_per_sec * 8;
+        printf("Processing time: %.3f seconds\n", elapsed_time);
+        printf("Processing speed: %.2f MB/s (%.2f Mbps)\n", speed_mb_per_sec, speed_mbps);
     } else {
-        log_operation(encrypt ? "Encrypt" : "Decrypt", input_path, 1);
-        printf("File %s successfully %s!\n", input_path, encrypt ? "encrypted" : "decrypted");
+        printf("Processing time: too fast to measure\n");
     }
 }
 

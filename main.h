@@ -9,6 +9,7 @@
 #include <direct.h>
 #include <locale.h>
 #include <io.h>
+#include <stdint.h>
 
 #define BLOCK_SIZE 16
 #define MAX_KEY_LEN 32
@@ -17,6 +18,7 @@
 #define USERS_FILE "C:\\Eclipse_dev\\Project_cryptography\\users\\users.dat"
 #define LOG_FILE "C:\\Eclipse_dev\\Project_cryptography\\logs\\log.txt"
 #define MAX_PATH_LEN 1024
+#define PROGRESS_BAR_THRESHOLD (256 * 1024 * 1024)
 
 typedef unsigned char BYTE;
 typedef unsigned int UINT;
@@ -50,5 +52,6 @@ BYTE* TwoFish_decrypt(TwoFish *tf, BYTE *cipher);
 // Утилиты
 void log_operation(const char *operation, const char *filename, int success);
 void create_necessary_dirs();
+void show_progress_bar(uint64_t processed, uint64_t total);
 
 #endif
