@@ -1,11 +1,10 @@
 #include "main.h"
-#include <fcntl.h>
 #include <sys/stat.h>
-#include <stdint.h>
+#include <dirent.h>
+#include <errno.h>
 
-// =============================================
-// Полные таблицы подстановки (S-boxes)
-// =============================================
+// Глобальные переменные и константы
+static uint32_t ShiftRegister = 1;
 
 static const BYTE substitution_table[256] = {
     0x63, 0x7C, 0x77, 0x7B, 0xF2, 0x6B, 0x6F, 0xC5, 0x30, 0x01, 0x67, 0x2B, 0xFE, 0xD7, 0xAB, 0x76,
@@ -26,92 +25,53 @@ static const BYTE substitution_table[256] = {
     0x8C, 0xA1, 0x89, 0x0D, 0xBF, 0xE6, 0x42, 0x68, 0x41, 0x99, 0x2D, 0x0F, 0xB0, 0x54, 0xBB, 0x16
 };
 
-// =============================================
-// Вспомогательные функции
-// =============================================
-
-void create_necessary_dirs() {
-    _mkdir("C:\\Eclipse_dev\\Project_cryptography\\users");
-    _mkdir("C:\\Eclipse_dev\\Project_cryptography\\logs");
+// Реализация генератора случайных чисел
+static int next_bit(void) {
+    uint32_t new_bit = ((ShiftRegister >> 31) ^ (ShiftRegister >> 6) ^
+                      (ShiftRegister >> 4) ^ (ShiftRegister >> 2) ^
+                      (ShiftRegister >> 1) ^ ShiftRegister) & 0x00000001;
+    ShiftRegister = (ShiftRegister >> 1) | (new_bit << 31);
+    return (int)(ShiftRegister & 0x00000001);
 }
 
-void secure_zero_memory(void* ptr, size_t len) {
-    volatile char* vptr = (volatile char*)ptr;
-    while (len--) *vptr++ = 0;
+void init_rng(const char* seed) {
+    ShiftRegister = 0;
+    for (size_t i = 0; seed[i] != '\0'; i++) {
+        ShiftRegister = (ShiftRegister << 5) + ShiftRegister + seed[i];
+    }
+    if (ShiftRegister == 0) ShiftRegister = 1;
 }
 
-void log_operation(const char* operation, const char* filename, int success) {
-    FILE* log_file = fopen(LOG_FILE, "a");
-    if (!log_file) return;
-
-    time_t now = time(NULL);
-    char time_str[20];
-    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
-
-    fprintf(log_file, "[%s] %s: %s - %s\n",
-            time_str,
-            operation,
-            filename,
-            success ? "SUCCESS" : "FAILED");
-    fclose(log_file);
+uint32_t get_random_uint32() {
+    uint32_t result = 0;
+    for (int i = 0; i < 32; i++) {
+        result = (result << 1) | next_bit();
+    }
+    return result;
 }
 
-void show_progress_bar(uint64_t processed, uint64_t total) {
-    static int initialized = 0;
-    static clock_t last_update = 0;
-    static int last_percent = -1;
+// Функции хеширования и генерации ключа
+void hash_password(const char* password, BYTE* hash) {
+    init_rng(password);
 
-    if (!initialized) {
-        printf("\nProcessing progress:\n");
-        printf("[");
-        for (int i = 0; i < 50; i++) printf(" ");
-        printf("] 0%%");
-        initialized = 1;
-    }
-
-    clock_t now = clock();
-    if (now - last_update < CLOCKS_PER_SEC / 10 && processed != total) {
-        return; // Обновляем не чаще 10 раз в секунду
-    }
-    last_update = now;
-
-    int percent = (int)((double)processed / total * 100);
-    if (percent == last_percent) return;
-    last_percent = percent;
-
-    printf("\r[");
-    int pos = percent / 2;
-    for (int i = 0; i < 50; i++) {
-        if (i < pos) printf("=");
-        else if (i == pos) printf(">");
-        else printf(" ");
-    }
-    printf("] %d%%", percent);
-    fflush(stdout);
-
-    if (processed == total) {
-        printf("\n");
-        initialized = 0;
-    }
-}
-
-// =============================================
-// Функции аутентификации
-// =============================================
-
-void generate_key_from_password(const char* password, BYTE* key, size_t key_len) {
-    size_t pass_len = strlen(password);
-    for (size_t i = 0; i < key_len; i++) {
-        key[i] = 0;
-        for (size_t j = 0; j < pass_len; j++) {
-            key[i] ^= password[j] + (i * 31) + (j * 17);
-            key[i] = (key[i] << 3) | (key[i] >> 5);
+    for (size_t i = 0; i < KEY_SIZE; i += 4) {
+        uint32_t rand_val = get_random_uint32();
+        for (int j = 0; j < 4 && (i + j) < KEY_SIZE; j++) {
+            hash[i + j] = (rand_val >> (8 * j)) & 0xFF;
         }
-        key[i] = substitution_table[key[i]];
-        if (i > 0) key[i] ^= key[i-1];
+    }
+
+    for (size_t i = 0; i < KEY_SIZE; i++) {
+        hash[i] = substitution_table[hash[i]];
+        if (i > 0) hash[i] ^= hash[i-1];
     }
 }
 
+void generate_key_from_password(const char* password, BYTE* key) {
+    hash_password(password, key);
+}
+
+// Функции аутентификации
 int authenticate(BYTE* key) {
     char username[MAX_USERNAME_LEN + 2];
     char password[MAX_PASSWORD_LEN + 2];
@@ -119,25 +79,21 @@ int authenticate(BYTE* key) {
     FILE* users_file;
 
     printf(" Authentication \n");
-    printf("1. Registration\n2. Entrance\n> ");
+    printf("1. Registration\n2. Login\n> ");
     int choice;
     if (scanf("%d", &choice) != 1 || (choice != 1 && choice != 2)) {
-        printf("Error: invalid choice!\n");
+        printf("Invalid choice!\n");
         while (getchar() != '\n');
         return 0;
     }
     while (getchar() != '\n');
 
-    printf("Login (max %d chars): ", MAX_USERNAME_LEN);
+    printf("Username (max %d chars): ", MAX_USERNAME_LEN);
     if (!fgets(username, sizeof(username), stdin)) return 0;
     username[strcspn(username, "\n")] = '\0';
 
-    if (strlen(username) > MAX_USERNAME_LEN) {
-        printf("Error: login too long (max %d characters)!\n", MAX_USERNAME_LEN);
-        return 0;
-    }
-    if (strlen(username) == 0) {
-        printf("Error: login cannot be empty!\n");
+    if (strlen(username) == 0 || strlen(username) > MAX_USERNAME_LEN) {
+        printf("Invalid username length!\n");
         return 0;
     }
 
@@ -145,79 +101,65 @@ int authenticate(BYTE* key) {
     if (!fgets(password, sizeof(password), stdin)) return 0;
     password[strcspn(password, "\n")] = '\0';
 
-    if (strlen(password) > MAX_PASSWORD_LEN) {
-        printf("Error: password too long (max %d characters)!\n", MAX_PASSWORD_LEN);
+    if (strlen(password) == 0 || strlen(password) > MAX_PASSWORD_LEN) {
+        printf("Invalid password length!\n");
         secure_zero_memory(password, MAX_PASSWORD_LEN);
         return 0;
     }
-    if (strlen(password) == 0) {
-        printf("Error: password cannot be empty!\n");
-        return 0;
-    }
 
-    generate_key_from_password(password, key, MAX_KEY_LEN);
+    // Генерируем хеш пароля (256-битный ключ)
+    generate_key_from_password(password, key);
     secure_zero_memory(password, MAX_PASSWORD_LEN);
 
     users_file = fopen(USERS_FILE, choice == 1 ? "ab+" : "rb");
     if (!users_file) {
-        log_operation("Auth", "Failed to open users file", 0);
+        log_operation("AUTH", "Failed to open users file", 0);
         return 0;
     }
 
+    // Регистрация
     if (choice == 1) {
         while (fread(&user, sizeof(User), 1, users_file)) {
             if (strcmp(user.username, username) == 0) {
                 fclose(users_file);
-                printf("Error: user '%s' already exists!\n", username);
-                log_operation("Register Failed", username, 0);
+                printf("User already exists!\n");
+                log_operation("REGISTER", username, 0);
                 return 0;
             }
         }
         strncpy(user.username, username, MAX_USERNAME_LEN);
-        memcpy(user.password_hash, key, MAX_KEY_LEN);
+        memcpy(user.password_hash, key, KEY_SIZE);
         fwrite(&user, sizeof(User), 1, users_file);
         printf("Registration successful!\n");
-        log_operation("Register", username, 1);
-    } else {
+        log_operation("REGISTER", username, 1);
+    }
+    // Вход
+    else {
         int found = 0;
-        int user_exists = 0;
         while (fread(&user, sizeof(User), 1, users_file)) {
             if (strcmp(user.username, username) == 0) {
-                user_exists = 1;
-                if (memcmp(user.password_hash, key, MAX_KEY_LEN) == 0) {
+                if (memcmp(user.password_hash, key, KEY_SIZE) == 0) {
                     found = 1;
                     break;
                 }
             }
         }
 
-        if (!user_exists) {
-            printf("Error: user '%s' does not exist!\n", username);
-            log_operation("Login Failed - User not found", username, 0);
-            fclose(users_file);
-            return 0;
-        }
-
         if (!found) {
-            printf("Error: incorrect password for user '%s'!\n", username);
-            log_operation("Login Failed - Wrong password", username, 0);
+            printf("Invalid credentials!\n");
+            log_operation("LOGIN", username, 0);
             fclose(users_file);
             return 0;
         }
-
         printf("Login successful!\n");
-        log_operation("Login", username, 1);
+        log_operation("LOGIN", username, 1);
     }
 
     fclose(users_file);
     return 1;
 }
 
-// ... [остальной код остается без изменений, как в вашем исходном файле]
-// =============================================
-// Функции шифрования TwoFish
-// =============================================
-
+// Реализация TwoFish
 #define ROL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 #define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 
@@ -242,9 +184,7 @@ void TwoFish_init(TwoFish* tf, BYTE* key, size_t length) {
     UINT* Me = (UINT*)malloc(tf->k * sizeof(UINT));
     UINT* Mo = (UINT*)malloc(tf->k * sizeof(UINT));
     if (!Me || !Mo) {
-        free(temp_key);
-        if (Me) free(Me);
-        if (Mo) free(Mo);
+        free(temp_key); free(Me); free(Mo);
         return;
     }
 
@@ -255,12 +195,12 @@ void TwoFish_init(TwoFish* tf, BYTE* key, size_t length) {
         {0xA4, 0x55, 0x87, 0x5A, 0x58, 0xDB, 0x9E, 0x03}
     };
 
-    for (int c1 = 0, c2 = 0, i = 0; i < 2 * tf->k; i++) {
+    for (int i = 0; i < 2 * tf->k; i++) {
         UINT val = 0;
         for (int j = 0; j < 4; j++) {
             val |= (temp_key[4 * i + j] << (24 - 8 * j));
         }
-        (i % 2 == 0) ? (Me[c1++] = val) : (Mo[c2++] = val);
+        (i % 2 == 0) ? (Me[i/2] = val) : (Mo[i/2] = val);
     }
 
     tf->SBox = (UINT*)malloc(tf->k * sizeof(UINT));
@@ -364,10 +304,7 @@ BYTE* TwoFish_decrypt(TwoFish* tf, BYTE* cipher) {
     return cipher;
 }
 
-// =============================================
 // Функции работы с файлами
-// =============================================
-
 void add_padding(BYTE* block, size_t data_len, size_t block_size) {
     BYTE pad_value = block_size - data_len;
     for (size_t i = data_len; i < block_size; i++) {
@@ -396,25 +333,24 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
     FILE* input_file = fopen(input_path, "rb");
     if (!input_file) {
         printf("Error opening input file: %s\n", input_path);
-        log_operation("File Open", input_path, 0);
+        log_operation("FILE OPEN", input_path, 0);
         return;
     }
 
-    // Получаем размер файла (64-битный)
-    _fseeki64(input_file, 0, SEEK_END);
-    uint64_t file_size = _ftelli64(input_file);
-    _fseeki64(input_file, 0, SEEK_SET);
+    fseek(input_file, 0, SEEK_END);
+    uint64_t file_size = ftell(input_file);
+    fseek(input_file, 0, SEEK_SET);
 
     FILE* temp_file = fopen(temp_path, "wb");
     if (!temp_file) {
         fclose(input_file);
         printf("Error creating temp file: %s\n", temp_path);
-        log_operation("Temp File Create", temp_path, 0);
+        log_operation("TEMP FILE", temp_path, 0);
         return;
     }
 
     TwoFish tf;
-    TwoFish_init(&tf, key, MAX_KEY_LEN);
+    TwoFish_init(&tf, key, KEY_SIZE);
     BYTE buffer[BLOCK_SIZE];
     size_t bytes_read;
     int success = 1;
@@ -423,7 +359,7 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
     int show_progress = file_size >= PROGRESS_BAR_THRESHOLD;
 
     if (show_progress) {
-        printf("Processing large file (%lld bytes)...\n", file_size);
+        printf("Processing large file (%lld bytes)...\n", (long long)file_size);
     }
 
     while ((bytes_read = fread(buffer, 1, BLOCK_SIZE, input_file)) > 0) {
@@ -435,7 +371,7 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
             TwoFish_decrypt(&tf, buffer);
             if (feof(input_file)) {
                 if (!is_valid_padding(buffer, BLOCK_SIZE)) {
-                    printf("Error: incorrect padding in file %s!\n", input_path);
+                    printf("Invalid padding in file %s!\n", input_path);
                     success = 0;
                     break;
                 }
@@ -459,7 +395,7 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
 
     if (!success) {
         remove(temp_path);
-        log_operation("File Processing", input_path, 0);
+        log_operation("FILE PROCESS", input_path, 0);
         return;
     }
 
@@ -475,66 +411,141 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
         return;
     }
 
-    log_operation(encrypt ? "Encrypt" : "Decrypt", input_path, 1);
+    log_operation(encrypt ? "ENCRYPT" : "DECRYPT", input_path, 1);
 
-    // Вывод размера файла в МБ
     double file_size_mb = (double)file_size / (1024.0 * 1024.0);
     printf("\nFile %s successfully %s!\n", input_path, encrypt ? "encrypted" : "decrypted");
     printf("File size: %.2f MB\n", file_size_mb);
 
-    // Расчет скорости
     if (elapsed_time > 0) {
-        double speed_mb_per_sec = (double)total_bytes_processed / (1024.0 * 1024.0) / elapsed_time;
+        double speed_mb_per_sec = file_size_mb / elapsed_time;
         double speed_mbps = speed_mb_per_sec * 8;
         printf("Processing time: %.3f seconds\n", elapsed_time);
-        printf("Processing speed: %.2f MB/s (%.2f Mbps)\n", speed_mb_per_sec, speed_mbps);
+        printf("Speed: %.2f MB/s (%.2f Mbps)\n", speed_mb_per_sec, speed_mbps);
     } else {
-        printf("Processing time: too fast to measure\n");
+        printf("Processing time: <1ms\n");
     }
 }
 
 void process_directory(const char* dirpath, BYTE* key, int encrypt) {
-    WIN32_FIND_DATAA findFileData;
-    HANDLE hFind = INVALID_HANDLE_VALUE;
-    char path[MAX_PATH_LEN];
+    DIR *dir;
+    struct dirent *entry;
+    struct stat statbuf;
 
-    snprintf(path, MAX_PATH_LEN, "%s\\*", dirpath);
-
-    hFind = FindFirstFileA(path, &findFileData);
-    if (hFind == INVALID_HANDLE_VALUE) {
+    if ((dir = opendir(dirpath)) == NULL) {
         printf("Error opening directory: %s\n", dirpath);
-        log_operation("Directory Open", dirpath, 0);
+        log_operation("DIR OPEN", dirpath, 0);
         return;
     }
 
-    do {
-        if (strcmp(findFileData.cFileName, ".") == 0 || strcmp(findFileData.cFileName, "..") == 0) {
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
             continue;
         }
 
         char full_path[MAX_PATH_LEN];
-        snprintf(full_path, MAX_PATH_LEN, "%s\\%s", dirpath, findFileData.cFileName);
+        snprintf(full_path, MAX_PATH_LEN, "%s/%s", dirpath, entry->d_name);
 
-        if (findFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        if (stat(full_path, &statbuf) == -1) {
+            continue;
+        }
+
+        if (S_ISDIR(statbuf.st_mode)) {
             process_directory(full_path, key, encrypt);
         } else {
             process_file(full_path, key, encrypt);
         }
-    } while (FindNextFileA(hFind, &findFileData) != 0);
+    }
 
-    FindClose(hFind);
-    log_operation("Directory Process", dirpath, 1);
-    printf("Directory %s successfully processed!\n", dirpath);
+    closedir(dir);
+    log_operation("DIR PROCESS", dirpath, 1);
+    printf("Directory %s processed!\n", dirpath);
 }
 
-// =============================================
-// Главная функция
-// =============================================
+// Вспомогательные функции
+void create_necessary_dirs() {
+    mkdir("/home/sergey/eclipse-workspace/Project_cryptography/", 0700);
+    mkdir("/home/sergey/eclipse-workspace/Project_cryptography/users", 0700);
+    mkdir("/home/sergey/eclipse-workspace/Project_cryptography/logs", 0700);
+}
 
-int main() {
-    setlocale(LC_ALL, "Russian");
+void secure_zero_memory(void* ptr, size_t len) {
+    volatile char* vptr = (volatile char*)ptr;
+    while (len--) *vptr++ = 0;
+}
+
+void log_operation(const char* operation, const char* filename, int success) {
+    FILE* log_file = fopen(LOG_FILE, "a");
+    if (!log_file) return;
+
+    time_t now = time(NULL);
+    char time_str[20];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
+
+    fprintf(log_file, "[%s] %s: %s - %s\n",
+            time_str,
+            operation,
+            filename,
+            success ? "SUCCESS" : "FAILED");
+    fclose(log_file);
+}
+
+void show_progress_bar(uint64_t processed, uint64_t total) {
+    static int initialized = 0;
+    static clock_t last_update = 0;
+    static int last_percent = -1;
+
+    if (!initialized) {
+        printf("\nProgress:\n");
+        printf("[");
+        for (int i = 0; i < 50; i++) printf(" ");
+        printf("] 0%%");
+        initialized = 1;
+    }
+
+    clock_t now = clock();
+    if (now - last_update < CLOCKS_PER_SEC / 10 && processed != total) {
+        return;
+    }
+    last_update = now;
+
+    int percent = (int)((double)processed / total * 100);
+    if (percent == last_percent) return;
+    last_percent = percent;
+
+    printf("\r[");
+    int pos = percent / 2;
+    for (int i = 0; i < 50; i++) {
+        if (i < pos) printf("=");
+        else if (i == pos) printf(">");
+        else printf(" ");
+    }
+    printf("] %d%%", percent);
+    fflush(stdout);
+
+    if (processed == total) {
+        printf("\n");
+        initialized = 0;
+    }
+}
+
+// Главная функция
+int main(int argc, char *argv[]) {
+    setlocale(LC_ALL, "");
+
+    // Check if we're running tests
+    if (argc > 1) {
+        if (strcmp(argv[1], "--test") == 0) {
+            run_unit_tests();
+            return 0;
+        } else if (strcmp(argv[1], "--integration-test") == 0) {
+            run_integration_tests();
+            return 0;
+        }
+    }
+
     create_necessary_dirs();
-    BYTE key[MAX_KEY_LEN];
+    BYTE key[KEY_SIZE];
     char path[MAX_PATH_LEN];
     int mode;
 
@@ -543,37 +554,37 @@ int main() {
         return 1;
     }
 
-    printf("Enter the path to the file/folder: ");
+    printf("Enter file/directory path: ");
     if (!fgets(path, MAX_PATH_LEN, stdin)) return 1;
     path[strcspn(path, "\n")] = '\0';
 
-    // Удаление кавычек, если они есть
     if (path[0] == '"' && path[strlen(path)-1] == '"') {
         path[strlen(path)-1] = '\0';
         memmove(path, path+1, strlen(path));
     }
 
-    printf("Mode (1-encryption, 0-decryption): ");
+    printf("Mode (1-encrypt, 0-decrypt): ");
     if (scanf("%d", &mode) != 1 || (mode != 0 && mode != 1)) {
-        printf("Error: invalid mode! Must be 0 (decryption) or 1 (encryption).\n");
-        secure_zero_memory(key, MAX_KEY_LEN);
+        printf("Invalid mode!\n");
+        secure_zero_memory(key, KEY_SIZE);
         return 1;
     }
 
-    DWORD attr = GetFileAttributesA(path);
-    if (attr == INVALID_FILE_ATTRIBUTES) {
-        printf("Error: path not found or access denied: %s\n", path);
-        log_operation("Path Access", path, 0);
-        secure_zero_memory(key, MAX_KEY_LEN);
+    struct stat statbuf;
+    if (stat(path, &statbuf) == -1) {
+        printf("Path not found: %s\n", path);
+        log_operation("PATH ACCESS", path, 0);
+        secure_zero_memory(key, KEY_SIZE);
         return 1;
     }
 
-    if (attr & FILE_ATTRIBUTE_DIRECTORY) {
+    if (S_ISDIR(statbuf.st_mode)) {
         process_directory(path, key, mode);
     } else {
         process_file(path, key, mode);
     }
 
-    secure_zero_memory(key, MAX_KEY_LEN);
+    secure_zero_memory(key, KEY_SIZE);
     return 0;
 }
+
