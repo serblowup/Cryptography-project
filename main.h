@@ -15,6 +15,7 @@
 
 #define BLOCK_SIZE 16
 #define KEY_SIZE 32
+#define IV_SIZE BLOCK_SIZE
 #define MAX_USERNAME_LEN 10
 #define MAX_PASSWORD_LEN 10
 #define USERS_FILE "/home/sergey/eclipse-workspace/Project_cryptography/users/users.dat"
@@ -41,6 +42,7 @@ void init_rng(const char* seed);
 uint32_t get_random_uint32();
 void hash_password(const char* password, BYTE* hash);
 void generate_key_from_password(const char* password, BYTE* key);
+void generate_random_iv(BYTE* iv);
 
 // Аутентификация
 int authenticate(BYTE* key);
@@ -53,8 +55,8 @@ void process_directory(const char *dirpath, BYTE *key, int encrypt);
 // TwoFish
 void TwoFish_init(TwoFish *tf, BYTE *key, size_t length);
 void TwoFish_cleanup(TwoFish *tf);
-BYTE* TwoFish_encrypt(TwoFish *tf, BYTE *plain);
-BYTE* TwoFish_decrypt(TwoFish *tf, BYTE *cipher);
+void TwoFish_encrypt_block(TwoFish *tf, BYTE *plain);
+void TwoFish_decrypt_block(TwoFish *tf, BYTE *cipher);
 
 // Утилиты
 void log_operation(const char *operation, const char *filename, int success);
@@ -64,5 +66,10 @@ void show_progress_bar(uint64_t processed, uint64_t total);
 // Тесты
 void run_unit_tests();
 void run_integration_tests();
+
+// Паддинг
+void add_padding(BYTE* block, size_t data_len, size_t block_size);
+int is_valid_padding(BYTE* block, size_t block_size);
+size_t remove_padding(BYTE* block, size_t block_size);
 
 #endif

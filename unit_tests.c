@@ -45,8 +45,8 @@ void test_password_hashing() {
     printf("test_password_hashing: PASSED\n");
 }
 
-// Тест шифрования/дешифрования TwoFish
-void test_twofish_roundtrip() {
+// Тест шифрования/дешифрования TwoFish в режиме CBC
+void test_twofish_cbc_roundtrip() {
     BYTE key[KEY_SIZE] = {
         0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
         0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10,
@@ -62,15 +62,34 @@ void test_twofish_roundtrip() {
     TwoFish tf;
     TwoFish_init(&tf, key, KEY_SIZE);
 
+    // Генерируем IV
+    BYTE iv[IV_SIZE];
+    generate_random_iv(iv);
 
-    // Шифрование, а затем дешифрование должно вернуть оригинал
-    BYTE* ciphertext = TwoFish_encrypt(&tf, plaintext);
-    BYTE* decrypted = TwoFish_decrypt(&tf, ciphertext);
+    // Шифрование в режиме CBC
+    BYTE ciphertext[BLOCK_SIZE];
+    memcpy(ciphertext, plaintext, BLOCK_SIZE);
+
+    // XOR с IV перед шифрованием
+    for (int i = 0; i < BLOCK_SIZE; i++) {
+        ciphertext[i] ^= iv[i];
+    }
+    TwoFish_encrypt_block(&tf, ciphertext);
+
+    // Дешифрование в режиме CBC
+    BYTE decrypted[BLOCK_SIZE];
+    memcpy(decrypted, ciphertext, BLOCK_SIZE);
+    TwoFish_decrypt_block(&tf, decrypted);
+
+    // XOR с IV после дешифрования
+    for (int i = 0; i < BLOCK_SIZE; i++) {
+        decrypted[i] ^= iv[i];
+    }
 
     assert(compare_bytes(plaintext, decrypted, BLOCK_SIZE));
 
     TwoFish_cleanup(&tf);
-    printf("test_twofish_roundtrip: PASSED\n");
+    printf("test_twofish_cbc_roundtrip: PASSED\n");
 }
 
 // Тестовые функции заполнения
@@ -83,7 +102,6 @@ void test_padding() {
         block[i] = (BYTE)(i + 1);  // 1, 2, 3, ..., 10
     }
 
-    void add_padding(BYTE* block, size_t data_len, size_t block_size);
     add_padding(block, data_len, BLOCK_SIZE);
 
     BYTE pad_value = BLOCK_SIZE - data_len;
@@ -92,7 +110,6 @@ void test_padding() {
     }
 
     // Тестовая проверка заполнения
-    int is_valid_padding(BYTE* block, size_t block_size);
     assert(is_valid_padding(block, BLOCK_SIZE));
 
     // Тест недопустимого заполнения (слишком большое значение)
@@ -101,7 +118,6 @@ void test_padding() {
 
     block[BLOCK_SIZE-1] = pad_value;
 
-    size_t remove_padding(BYTE* block, size_t block_size);
     size_t new_len = remove_padding(block, BLOCK_SIZE);
     assert(new_len == data_len);  // Should return original length
 
@@ -168,11 +184,10 @@ void run_unit_tests() {
 
     test_rng_initialization();
     test_password_hashing();
-    test_twofish_roundtrip();
+    test_twofish_cbc_roundtrip();
     test_padding();
     test_file_processing();
     test_utility_functions();
 
     printf("\nAll tests passed successfully!\n");
 }
-

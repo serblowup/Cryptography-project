@@ -236,7 +236,7 @@ void TwoFish_cleanup(TwoFish* tf) {
     if (tf->SBox) free(tf->SBox);
 }
 
-BYTE* TwoFish_encrypt(TwoFish* tf, BYTE* plain) {
+void TwoFish_encrypt_block(TwoFish* tf, BYTE* plain) {
     UINT A = (plain[0] << 24) | (plain[1] << 16) | (plain[2] << 8) | plain[3];
     UINT B = (plain[4] << 24) | (plain[5] << 16) | (plain[6] << 8) | plain[7];
     UINT C = (plain[8] << 24) | (plain[9] << 16) | (plain[10] << 8) | plain[11];
@@ -267,10 +267,9 @@ BYTE* TwoFish_encrypt(TwoFish* tf, BYTE* plain) {
         plain[i + 8] = (C >> (24 - 8 * i)) & 0xFF;
         plain[i + 12] = (D >> (24 - 8 * i)) & 0xFF;
     }
-    return plain;
 }
 
-BYTE* TwoFish_decrypt(TwoFish* tf, BYTE* cipher) {
+void TwoFish_decrypt_block(TwoFish* tf, BYTE* cipher) {
     UINT A = (cipher[0] << 24) | (cipher[1] << 16) | (cipher[2] << 8) | cipher[3];
     UINT B = (cipher[4] << 24) | (cipher[5] << 16) | (cipher[6] << 8) | cipher[7];
     UINT C = (cipher[8] << 24) | (cipher[9] << 16) | (cipher[10] << 8) | cipher[11];
@@ -301,7 +300,6 @@ BYTE* TwoFish_decrypt(TwoFish* tf, BYTE* cipher) {
         cipher[i + 8] = (C >> (24 - 8 * i)) & 0xFF;
         cipher[i + 12] = (D >> (24 - 8 * i)) & 0xFF;
     }
-    return cipher;
 }
 
 // Функции работы с файлами
@@ -324,6 +322,12 @@ int is_valid_padding(BYTE* block, size_t block_size) {
 size_t remove_padding(BYTE* block, size_t block_size) {
     BYTE pad_value = block[block_size - 1];
     return block_size - pad_value;
+}
+
+void generate_random_iv(BYTE* iv) {
+    for (int i = 0; i < IV_SIZE; i++) {
+        iv[i] = get_random_uint32() & 0xFF;
+    }
 }
 
 void process_file(const char* input_path, BYTE* key, int encrypt) {
@@ -352,11 +356,30 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
     TwoFish tf;
     TwoFish_init(&tf, key, KEY_SIZE);
     BYTE buffer[BLOCK_SIZE];
+    BYTE iv[IV_SIZE];
+    BYTE prev_block[BLOCK_SIZE];
     size_t bytes_read;
     int success = 1;
     uint64_t total_bytes_processed = 0;
     clock_t start_time = clock();
     int show_progress = file_size >= PROGRESS_BAR_THRESHOLD;
+
+    if (encrypt) {
+        // Генерируем случайный IV при шифровании
+        generate_random_iv(iv);
+        fwrite(iv, 1, IV_SIZE, temp_file);
+    } else {
+        // Читаем IV из файла при дешифровании
+        if (fread(iv, 1, IV_SIZE, input_file) != IV_SIZE) {
+            printf("Error reading IV from file!\n");
+            fclose(input_file);
+            fclose(temp_file);
+            remove(temp_path);
+            return;
+        }
+    }
+
+    memcpy(prev_block, iv, BLOCK_SIZE);
 
     if (show_progress) {
         printf("Processing large file (%lld bytes)...\n", (long long)file_size);
@@ -364,11 +387,32 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
 
     while ((bytes_read = fread(buffer, 1, BLOCK_SIZE, input_file)) > 0) {
         if (encrypt) {
-            if (bytes_read < BLOCK_SIZE) add_padding(buffer, bytes_read, BLOCK_SIZE);
-            TwoFish_encrypt(&tf, buffer);
+            if (bytes_read < BLOCK_SIZE) {
+                add_padding(buffer, bytes_read, BLOCK_SIZE);
+            }
+
+            // CBC режим: XOR с предыдущим блоком перед шифрованием
+            for (int i = 0; i < BLOCK_SIZE; i++) {
+                buffer[i] ^= prev_block[i];
+            }
+
+            TwoFish_encrypt_block(&tf, buffer);
+            memcpy(prev_block, buffer, BLOCK_SIZE);
             fwrite(buffer, 1, BLOCK_SIZE, temp_file);
         } else {
-            TwoFish_decrypt(&tf, buffer);
+            BYTE temp_block[BLOCK_SIZE];
+            memcpy(temp_block, buffer, BLOCK_SIZE);
+
+            TwoFish_decrypt_block(&tf, buffer);
+
+            // CBC режим: XOR с предыдущим блоком после дешифрования
+            for (int i = 0; i < BLOCK_SIZE; i++) {
+                buffer[i] ^= prev_block[i];
+            }
+
+            // Сохраняем текущий зашифрованный блок для следующей итерации
+            memcpy(prev_block, temp_block, BLOCK_SIZE);
+
             if (feof(input_file)) {
                 if (!is_valid_padding(buffer, BLOCK_SIZE)) {
                     printf("Invalid padding in file %s!\n", input_path);
@@ -379,8 +423,8 @@ void process_file(const char* input_path, BYTE* key, int encrypt) {
             }
             fwrite(buffer, 1, bytes_read, temp_file);
         }
-        total_bytes_processed += bytes_read;
 
+        total_bytes_processed += bytes_read;
         if (show_progress) {
             show_progress_bar(total_bytes_processed, file_size);
         }
